@@ -194,6 +194,13 @@ document.getElementById('btnProcess').addEventListener('click', async () => {
     }
   }
 
+  // Ordenar por Turno y luego por número de máquina
+  processedData.sort((a, b) => {
+    if (a.turno < b.turno) return -1;
+    if (a.turno > b.turno) return  1;
+    return a.maquina - b.maquina;
+  });
+
   renderResults();
   btn.disabled    = false;
   btn.textContent = '⚙️ Procesar PDFs';
@@ -277,17 +284,18 @@ async function parsePDF(file) {
     const artW    = artHeader.width  || 70;
     const headerY = artHeader.transform[5];
 
-    // Right boundary of ARTICULO column = start of next header column
+    // Right boundary of ARTICULO column = start of DESCRIPCIÓN (wider Y tolerance)
     const rightCandidates = items
       .filter(it => {
         const x = it.transform[4];
         const y = it.transform[5];
-        const t = (it.str || '').trim();
-        return Math.abs(y - headerY) < 5 && x > artX + 10 &&
+        const t = (it.str || '').trim().toUpperCase();
+        return Math.abs(y - headerY) < 15 && x > artX + 10 &&
                (t.startsWith('DESCRI') || t.startsWith('TALLE') || t.startsWith('COLOR'));
       })
       .map(it => it.transform[4]);
-    const artEndX = rightCandidates.length ? Math.min(...rightCandidates) : artX + artW + 50;
+    // Use found boundary or fall back to a narrow fixed width (article codes are short)
+    const artEndX = rightCandidates.length ? Math.min(...rightCandidates) : artX + 120;
 
     // MAQ. header X
     const maqHeader = items.find(it => it.str && it.str.trim() === 'MAQ.');
