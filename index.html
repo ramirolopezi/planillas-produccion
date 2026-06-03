@@ -299,8 +299,14 @@ async function parsePDF(file) {
 
     addLog(`  Página ${p}: artX=${Math.round(artX)} artEndX=${Math.round(artEndX)} maqX=${Math.round(maqX)} turno=${turno}`);
 
-    // Build row groups from items below the header
-    const dataItems  = items.filter(it => it.transform[5] < headerY - 2);
+    // Bottom boundary: "TOTALES" row marks the end of the table
+    const totalesItem = items.find(it => it.str && it.str.trim() === 'TOTALES');
+    const bottomY = totalesItem ? totalesItem.transform[5] : -Infinity;
+
+    // Build row groups: only items between header and TOTALES
+    const dataItems  = items.filter(it =>
+      it.transform[5] < headerY - 2 && it.transform[5] > bottomY
+    );
     const lineGroups = groupByY(dataItems);
 
     let currentMaq = null;
@@ -326,6 +332,12 @@ async function parsePDF(file) {
       // Take only the leftmost item to avoid any bleed from adjacent columns
       const articulo = artItems[0].str.trim();
       if (!articulo || articulo === '0') continue;
+
+      // Descartar textos que no son artículos (pie de página, totales, etc.)
+      const INVALIDOS = ['FIRMA', 'RESPONSABLE', 'TOTALES', 'AREA', 'SELECCIONAR',
+                         'DESCRIPCI', 'TALLE', 'COLOR', 'UNIDADES', 'REPUESTOS',
+                         'CONTROL', 'CHEQUEO', 'DISPAROS', 'previa', '………'];
+      if (INVALIDOS.some(inv => articulo.toUpperCase().includes(inv.toUpperCase()))) continue;
 
       rows.push({ fecha, turno, maquina: currentMaq, articulo });
     }
