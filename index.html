@@ -271,14 +271,13 @@ async function parsePDF(file) {
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
   const fn  = parseFilename(file.name);
   const rows = [];
-  let fileSlotIndex = 0; // slots acumulados a lo largo de las páginas del archivo
 
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
     const tc   = await page.getTextContent();
     const items = tc.items;
 
-    // Fecha y turno: del texto del PDF primero, nombre de archivo como fallback
+    // Fecha y turno
     const meta  = extractMetaFromText(items);
     const fecha = meta.fecha || fn.fecha || '?';
     const turno = meta.turno || fn.turno || '?';
@@ -296,40 +295,58 @@ async function parsePDF(file) {
     const artX    = artHeader.transform[4];
     const headerY = artHeader.transform[5];
 
-    // Límite inferior de la tabla: fila TOTALES
+    // Límite inferior: fila TOTALES
     const totalesItem = items.find(it => (it.str || '').trim() === 'TOTALES');
     const bottomY = totalesItem ? totalesItem.transform[5] : -Infinity;
 
-    // ── Estrategia: contar slots (2 por máquina) en vez de leer número de MAQ ──
-    // Recopilar TODOS los ítems de la columna ARTICULO (incluyendo "0")
-    // con rango X muy estrecho para no capturar descripción ni talle
-    const slotItems = items
+    // Columna MAQ
+    const maqHeader = items.find(it => (it.str || '').trim() === 'MAQ.');
+    const maqX = maqHeader ? maqHeader.transform[4] : artX - 60;
+
+    // ── PASADA 1: recopilar todos los números de máquina con su posición Y ──
+    const maqNumbers = items
       .filter(it => {
-        if (!it.str || !it.str.trim()) return false;
         const x = it.transform[4];
         const y = it.transform[5];
-        return x >= artX - 12 &&   // margen izquierdo pequeño
-               x <= artX + 28 &&   // rango estrecho: solo artículo, no descripción
-               y < headerY - 2 &&  // debajo del encabezado
-               y > bottomY;        // encima de TOTALES
+        const v = (it.str || '').trim();
+        return /^\d+$/.test(v) &&
+               parseInt(v) >= 1 && parseInt(v) <= 999 &&
+               x >= maqX - 30 && x < artX - 3 &&
+               y < headerY - 2 && y > bottomY;
       })
-      .sort((a, b) => b.transform[5] - a.transform[5]); // orden: arriba → abajo
+      .map(it => ({ maq: parseInt(it.str.trim()), y: it.transform[5] }));
 
-    addLog(`  Pág ${p} [${file.name}]: artX=${Math.round(artX)} slots=${slotItems.length} turno=${turno}`);
+    // ── PASADA 2: recopilar artículos con su posición Y ──
+    const artItems = items
+      .filter(it => {
+        const x = it.transform[4];
+        const y = it.transform[5];
+        return x >= artX - 12 && x <= artX + 28 &&
+               y < headerY - 2 && y > bottomY &&
+               (it.str || '').trim() !== '';
+      })
+      .sort((a, b) => b.transform[5] - a.transform[5]); // arriba → abajo
 
-    for (let i = 0; i < slotItems.length; i++) {
-      const slotIdx = fileSlotIndex + i;
-      const maquina = Math.floor(slotIdx / 2) + 1; // 2 slots por máquina
-      const articulo = slotItems[i].str.trim();
+    addLog(`  Pág ${p} [${file.name}]: artX=${Math.round(artX)} arts=${artItems.length} maqs=${maqNumbers.length} turno=${turno}`);
 
-      // Filtrar: vacíos, ceros y textos que no son artículos
+    // ── Asignar cada artículo a la máquina más cercana por Y ──
+    for (const artIt of artItems) {
+      const artY = artIt.transform[5];
+      const articulo = artIt.str.trim();
+
       if (!articulo || articulo === '0') continue;
       if (INVALIDOS.some(inv => articulo.toUpperCase().includes(inv.toUpperCase()))) continue;
 
-      rows.push({ fecha, turno, maquina, articulo });
-    }
+      // Buscar número de máquina más cercano en Y (dentro de 25pt)
+      let closest = null, minDist = Infinity;
+      for (const mn of maqNumbers) {
+        const d = Math.abs(mn.y - artY);
+        if (d < minDist) { minDist = d; closest = mn; }
+      }
+      if (!closest || minDist > 25) continue;
 
-    fileSlotIndex += slotItems.length;
+      rows.push({ fecha, turno, maquina: closest.maq, articulo });
+    }
   }
 
   return rows;
