@@ -317,7 +317,7 @@ async function parsePDF(file) {
         const x   = it.transform[4];
         const val = it.str.trim();
         return /^\d+$/.test(val) &&
-               parseInt(val) >= 1 && parseInt(val) <= 99 &&
+               parseInt(val) >= 1 && parseInt(val) <= 999 &&
                x >= maqX - 25 && x < artX - 3;
       });
       if (maqItem) currentMaq = parseInt(maqItem.str.trim());
