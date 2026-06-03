@@ -303,8 +303,8 @@ async function parsePDF(file) {
     const maqHeader = items.find(it => (it.str || '').trim() === 'MAQ.');
     const maqX = maqHeader ? maqHeader.transform[4] : artX - 60;
 
-    // ── PASADA 1: recopilar todos los números de máquina con su posición Y ──
-    const maqNumbers = items
+    // ── PASADA 1: números de MAQ reales, ordenados de arriba a abajo ──
+    const sortedMaqs = items
       .filter(it => {
         const x = it.transform[4];
         const y = it.transform[5];
@@ -314,10 +314,11 @@ async function parsePDF(file) {
                x >= maqX - 30 && x < artX - 3 &&
                y < headerY - 2 && y > bottomY;
       })
-      .map(it => ({ maq: parseInt(it.str.trim()), y: it.transform[5] }));
+      .sort((a, b) => b.transform[5] - a.transform[5]) // arriba → abajo
+      .map(it => parseInt(it.str.trim()));
 
-    // ── PASADA 2: recopilar artículos con su posición Y ──
-    const artItems = items
+    // ── PASADA 2: artículos en la columna ARTICULO, ordenados de arriba a abajo ──
+    const sortedArts = items
       .filter(it => {
         const x = it.transform[4];
         const y = it.transform[5];
@@ -327,25 +328,21 @@ async function parsePDF(file) {
       })
       .sort((a, b) => b.transform[5] - a.transform[5]); // arriba → abajo
 
-    addLog(`  Pág ${p} [${file.name}]: artX=${Math.round(artX)} arts=${artItems.length} maqs=${maqNumbers.length} turno=${turno}`);
+    addLog(`  Pág ${p} [${file.name}]: artX=${Math.round(artX)} maqs=${sortedMaqs.length} arts=${sortedArts.length} turno=${turno}`);
 
-    // ── Asignar cada artículo a la máquina más cercana por Y ──
-    for (const artIt of artItems) {
-      const artY = artIt.transform[5];
-      const articulo = artIt.str.trim();
+    // ── Asignación: máquina[i] → slots 2i y 2i+1 ──
+    for (let i = 0; i < sortedMaqs.length; i++) {
+      const maquina = sortedMaqs[i];
+      const slot1 = sortedArts[2 * i];
+      const slot2 = sortedArts[2 * i + 1];
 
-      if (!articulo || articulo === '0') continue;
-      if (INVALIDOS.some(inv => articulo.toUpperCase().includes(inv.toUpperCase()))) continue;
-
-      // Buscar número de máquina más cercano en Y (dentro de 25pt)
-      let closest = null, minDist = Infinity;
-      for (const mn of maqNumbers) {
-        const d = Math.abs(mn.y - artY);
-        if (d < minDist) { minDist = d; closest = mn; }
+      for (const slot of [slot1, slot2]) {
+        if (!slot) continue;
+        const articulo = slot.str.trim();
+        if (!articulo || articulo === '0') continue;
+        if (INVALIDOS.some(inv => articulo.toUpperCase().includes(inv.toUpperCase()))) continue;
+        rows.push({ fecha, turno, maquina, articulo });
       }
-      if (!closest || minDist > 25) continue;
-
-      rows.push({ fecha, turno, maquina: closest.maq, articulo });
     }
   }
 
