@@ -276,30 +276,28 @@ async function parsePDF(file) {
     const fecha = meta.fecha || fn.fecha || '?';
     const turno = meta.turno || fn.turno || '?';
 
-    // Anchor on "ARTICULO" header to get column X
+    // Anchor on "ARTICULO" header
     const artHeader = items.find(it => it.str && it.str.trim() === 'ARTICULO');
     if (!artHeader) continue;
 
     const artX    = artHeader.transform[4];
-    const artW    = artHeader.width  || 70;
     const headerY = artHeader.transform[5];
 
-    // Right boundary of ARTICULO column = start of DESCRIPCIÓN (wider Y tolerance)
-    const rightCandidates = items
-      .filter(it => {
-        const x = it.transform[4];
-        const y = it.transform[5];
-        const t = (it.str || '').trim().toUpperCase();
-        return Math.abs(y - headerY) < 15 && x > artX + 10 &&
-               (t.startsWith('DESCRI') || t.startsWith('TALLE') || t.startsWith('COLOR'));
-      })
-      .map(it => it.transform[4]);
-    // Use found boundary or fall back to a narrow fixed width (article codes are short)
-    const artEndX = rightCandidates.length ? Math.min(...rightCandidates) : artX + 120;
+    // Find ALL header items on the same row (±15pt Y), sorted left→right
+    const headerRow = items
+      .filter(it => it.str && it.str.trim() && Math.abs(it.transform[5] - headerY) < 15)
+      .sort((a, b) => a.transform[4] - b.transform[4]);
+
+    // The column boundary of ARTICULO = X of the next header item to its right
+    const artHeaderIdx = headerRow.findIndex(it => it.str.trim() === 'ARTICULO');
+    const nextHeader   = artHeaderIdx >= 0 ? headerRow[artHeaderIdx + 1] : null;
+    const artEndX      = nextHeader ? nextHeader.transform[4] : artX + 90;
 
     // MAQ. header X
     const maqHeader = items.find(it => it.str && it.str.trim() === 'MAQ.');
     const maqX      = maqHeader ? maqHeader.transform[4] : artX - 60;
+
+    addLog(`  Página ${p}: artX=${Math.round(artX)} artEndX=${Math.round(artEndX)} maqX=${Math.round(maqX)} turno=${turno}`);
 
     // Build row groups from items below the header
     const dataItems  = items.filter(it => it.transform[5] < headerY - 2);
@@ -318,14 +316,15 @@ async function parsePDF(file) {
       });
       if (maqItem) currentMaq = parseInt(maqItem.str.trim());
 
-      // ── Collect article text (all items in ARTICULO column range)
+      // ── Article: only the item(s) strictly within the ARTICULO column
       const artItems = grp.items.filter(it => {
         const x = it.transform[4];
         return x >= artX - 8 && x < artEndX;
       });
       if (!artItems.length || currentMaq === null) continue;
 
-      const articulo = artItems.map(it => it.str.trim()).filter(Boolean).join(' ').trim();
+      // Take only the leftmost item to avoid any bleed from adjacent columns
+      const articulo = artItems[0].str.trim();
       if (!articulo || articulo === '0') continue;
 
       rows.push({ fecha, turno, maquina: currentMaq, articulo });
