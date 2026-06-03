@@ -260,87 +260,76 @@ function groupByY(items, tol = 3) {
   return groups;
 }
 
+// Textos que nunca son artículos válidos
+const INVALIDOS = ['FIRMA', 'RESPONSABLE', 'TOTALES', 'SELECCIONAR',
+                   'DESCRIPCI', 'UNIDADES', 'REPUESTOS', 'CONTROL',
+                   'CHEQUEO', 'DISPAROS', 'previa', '………',
+                   'PLANILLA', 'PRODUCCI'];
+
 async function parsePDF(file) {
-  const buf  = await file.arrayBuffer();
-  const pdf  = await pdfjsLib.getDocument({ data: buf }).promise;
-  const fn   = parseFilename(file.name);
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const fn  = parseFilename(file.name);
   const rows = [];
+  let fileSlotIndex = 0; // slots acumulados a lo largo de las páginas del archivo
 
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
     const tc   = await page.getTextContent();
     const items = tc.items;
 
-    // Resolve fecha / turno: PDF text first, filename fallback
-    const meta = extractMetaFromText(items);
+    // Fecha y turno: del texto del PDF primero, nombre de archivo como fallback
+    const meta  = extractMetaFromText(items);
     const fecha = meta.fecha || fn.fecha || '?';
     const turno = meta.turno || fn.turno || '?';
 
-    // Anchor on "ARTICULO" header
-    const artHeader = items.find(it => it.str && it.str.trim() === 'ARTICULO');
-    if (!artHeader) continue;
+    // Buscar encabezado ARTICULO
+    const artHeader = items.find(it => {
+      const s = (it.str || '').trim().toUpperCase().replace(/[^A-Z]/g, '');
+      return s === 'ARTICULO' || s === 'ARTCULO';
+    });
+    if (!artHeader) {
+      addLog(`  Pág ${p} [${file.name}]: columna ARTICULO no encontrada`, true);
+      continue;
+    }
 
     const artX    = artHeader.transform[4];
     const headerY = artHeader.transform[5];
 
-    // Find ALL header items on the same row (±15pt Y), sorted left→right
-    const headerRow = items
-      .filter(it => it.str && it.str.trim() && Math.abs(it.transform[5] - headerY) < 15)
-      .sort((a, b) => a.transform[4] - b.transform[4]);
-
-    // The column boundary of ARTICULO = X of the next header item to its right
-    const artHeaderIdx = headerRow.findIndex(it => it.str.trim() === 'ARTICULO');
-    const nextHeader   = artHeaderIdx >= 0 ? headerRow[artHeaderIdx + 1] : null;
-    const artEndX      = nextHeader ? nextHeader.transform[4] : artX + 90;
-
-    // MAQ. header X
-    const maqHeader = items.find(it => it.str && it.str.trim() === 'MAQ.');
-    const maqX      = maqHeader ? maqHeader.transform[4] : artX - 60;
-
-    addLog(`  Página ${p}: artX=${Math.round(artX)} artEndX=${Math.round(artEndX)} maqX=${Math.round(maqX)} turno=${turno}`);
-
-    // Bottom boundary: "TOTALES" row marks the end of the table
-    const totalesItem = items.find(it => it.str && it.str.trim() === 'TOTALES');
+    // Límite inferior de la tabla: fila TOTALES
+    const totalesItem = items.find(it => (it.str || '').trim() === 'TOTALES');
     const bottomY = totalesItem ? totalesItem.transform[5] : -Infinity;
 
-    // Build row groups: only items between header and TOTALES
-    const dataItems  = items.filter(it =>
-      it.transform[5] < headerY - 2 && it.transform[5] > bottomY
-    );
-    const lineGroups = groupByY(dataItems);
-
-    let currentMaq = null;
-
-    for (const grp of lineGroups) {
-      // ── Detect machine number (integer 1-99 in MAQ column)
-      const maqItem = grp.items.find(it => {
-        const x   = it.transform[4];
-        const val = it.str.trim();
-        return /^\d+$/.test(val) &&
-               parseInt(val) >= 1 && parseInt(val) <= 999 &&
-               x >= maqX - 25 && x < artX - 3;
-      });
-      if (maqItem) currentMaq = parseInt(maqItem.str.trim());
-
-      // ── Article: only the item(s) strictly within the ARTICULO column
-      const artItems = grp.items.filter(it => {
+    // ── Estrategia: contar slots (2 por máquina) en vez de leer número de MAQ ──
+    // Recopilar TODOS los ítems de la columna ARTICULO (incluyendo "0")
+    // con rango X muy estrecho para no capturar descripción ni talle
+    const slotItems = items
+      .filter(it => {
+        if (!it.str || !it.str.trim()) return false;
         const x = it.transform[4];
-        return x >= artX - 8 && x < artEndX;
-      });
-      if (!artItems.length || currentMaq === null) continue;
+        const y = it.transform[5];
+        return x >= artX - 12 &&   // margen izquierdo pequeño
+               x <= artX + 28 &&   // rango estrecho: solo artículo, no descripción
+               y < headerY - 2 &&  // debajo del encabezado
+               y > bottomY;        // encima de TOTALES
+      })
+      .sort((a, b) => b.transform[5] - a.transform[5]); // orden: arriba → abajo
 
-      // Take only the leftmost item to avoid any bleed from adjacent columns
-      const articulo = artItems[0].str.trim();
+    addLog(`  Pág ${p} [${file.name}]: artX=${Math.round(artX)} slots=${slotItems.length} turno=${turno}`);
+
+    for (let i = 0; i < slotItems.length; i++) {
+      const slotIdx = fileSlotIndex + i;
+      const maquina = Math.floor(slotIdx / 2) + 1; // 2 slots por máquina
+      const articulo = slotItems[i].str.trim();
+
+      // Filtrar: vacíos, ceros y textos que no son artículos
       if (!articulo || articulo === '0') continue;
-
-      // Descartar textos que no son artículos (pie de página, totales, etc.)
-      const INVALIDOS = ['FIRMA', 'RESPONSABLE', 'TOTALES', 'AREA', 'SELECCIONAR',
-                         'DESCRIPCI', 'TALLE', 'COLOR', 'UNIDADES', 'REPUESTOS',
-                         'CONTROL', 'CHEQUEO', 'DISPAROS', 'previa', '………'];
       if (INVALIDOS.some(inv => articulo.toUpperCase().includes(inv.toUpperCase()))) continue;
 
-      rows.push({ fecha, turno, maquina: currentMaq, articulo });
+      rows.push({ fecha, turno, maquina, articulo });
     }
+
+    fileSlotIndex += slotItems.length;
   }
 
   return rows;
