@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Planillas Producción → Excel</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f4f8; color: #2d3748; min-height: 100vh; }
+
+    header { background: #1a56db; color: white; padding: 22px 20px; text-align: center; }
+    header h1 { font-size: 1.55rem; margin-bottom: 4px; }
+    header p { opacity: 0.85; font-size: 0.92rem; }
+
+    .container { max-width: 980px; margin: 24px auto; padding: 0 16px; }
+
+    .card { background: white; border-radius: 10px; padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 5px rgba(0,0,0,0.09); }
+    .card-title { font-size: 0.78rem; font-weight: 700; color: #718096; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 16px; }
+
+    /* Drop zone */
+    .drop-zone { border: 2px dashed #a0aec0; border-radius: 8px; padding: 38px 20px; text-align: center; cursor: pointer; transition: all 0.18s; background: #f7fafc; }
+    .drop-zone:hover, .drop-zone.drag-over { border-color: #1a56db; background: #ebf4ff; border-style: solid; }
+    .drop-zone input { display: none; }
+    .drop-icon { font-size: 2.8rem; margin-bottom: 10px; }
+    .drop-text { color: #4a5568; line-height: 1.7; }
+    .drop-text strong { color: #1a56db; }
+
+    /* File list */
+    .file-item { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid #edf2f7; font-size: 0.88rem; }
+    .file-item:last-child { border-bottom: none; }
+    .file-name { flex: 1; word-break: break-all; }
+    .badge { padding: 2px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
+    .badge-pending   { background: #e2e8f0; color: #4a5568; }
+    .badge-processing{ background: #ebf4ff; color: #1a56db; }
+    .badge-ok        { background: #f0fff4; color: #276749; }
+    .badge-error     { background: #fff5f5; color: #c53030; }
+
+    /* Buttons */
+    .btn-row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .btn { padding: 10px 22px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9rem; font-weight: 600; transition: opacity 0.15s; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: #1a56db; color: white; }
+    .btn-success { background: #276749; color: white; }
+    .btn-ghost   { background: #e2e8f0; color: #2d3748; }
+
+    /* Table */
+    .table-wrap { overflow-x: auto; margin-top: 16px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.87rem; }
+    thead tr { background: #1a56db; color: white; }
+    th { padding: 10px 14px; text-align: left; font-weight: 600; white-space: nowrap; }
+    td { padding: 9px 14px; border-bottom: 1px solid #edf2f7; }
+    tbody tr:hover td { background: #f7fafc; }
+    .summary { color: #718096; font-size: 0.88rem; margin-bottom: 4px; }
+    .more-rows { text-align: center; padding: 14px; color: #a0aec0; font-size: 0.85rem; border-top: 1px solid #edf2f7; }
+    .empty-msg { text-align: center; padding: 32px; color: #a0aec0; }
+
+    .log { background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; margin-top: 16px; font-size: 0.8rem; font-family: monospace; max-height: 160px; overflow-y: auto; display: none; }
+    .log-line { padding: 1px 0; color: #4a5568; }
+    .log-line.warn { color: #c05621; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>📋 Planillas de Producción → Excel</h1>
+  <p>Cargá los PDFs diarios y exportalos a una planilla consolidada</p>
+</header>
+
+<div class="container">
+
+  <div class="card">
+    <div class="card-title">1 · Cargar archivos PDF</div>
+    <div class="drop-zone" id="dropZone">
+      <div class="drop-icon">📂</div>
+      <div class="drop-text">
+        <strong>Arrastrá los PDFs aquí</strong><br>
+        o hacé clic para seleccionar archivos
+      </div>
+      <input type="file" id="fileInput" accept=".pdf" multiple>
+    </div>
+    <div id="fileList" style="margin-top:14px; display:none">
+      <div id="fileItems"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">2 · Procesar y exportar</div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btnProcess" disabled>⚙️ Procesar PDFs</button>
+      <button class="btn btn-success" id="btnExport" disabled>⬇️ Exportar a Excel</button>
+      <button class="btn btn-ghost"   id="btnClear">🗑️ Limpiar todo</button>
+    </div>
+    <div class="log" id="log"></div>
+  </div>
+
+  <div class="card" id="resultsCard" style="display:none">
+    <div class="card-title">3 · Resultados</div>
+    <p class="summary" id="summary"></p>
+    <div class="table-wrap" id="tableWrap"></div>
+  </div>
+
+</div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+let files = [];
+let processedData = [];
+const logEl = document.getElementById('log');
+
+function addLog(msg, warn = false) {
+  logEl.style.display = 'block';
+  const d = document.createElement('div');
+  d.className = 'log-line' + (warn ? ' warn' : '');
+  d.textContent = msg;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ── Drop zone ──────────────────────────────────────────────────────────────
+
+const dropZone  = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', ()  => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  addFiles([...e.dataTransfer.files].filter(f => f.name.toLowerCase().endsWith('.pdf')));
+});
+fileInput.addEventListener('change', e => { addFiles([...e.target.files]); fileInput.value = ''; });
+
+function addFiles(newFiles) {
+  const existing = new Set(files.map(f => f.name));
+  files = [...files, ...newFiles.filter(f => !existing.has(f.name))];
+  renderFileList();
+  document.getElementById('btnProcess').disabled = files.length === 0;
+}
+
+function renderFileList() {
+  const list  = document.getElementById('fileList');
+  const items = document.getElementById('fileItems');
+  if (!files.length) { list.style.display = 'none'; return; }
+  list.style.display = 'block';
+  items.innerHTML = files.map((f, i) => `
+    <div class="file-item">
+      <span>📄</span>
+      <span class="file-name">${esc(f.name)}</span>
+      <span class="badge badge-pending" id="badge-${i}">Pendiente</span>
+    </div>`).join('');
+}
+
+function setBadge(i, type, text) {
+  const el = document.getElementById(`badge-${i}`);
+  if (el) { el.className = `badge badge-${type}`; el.textContent = text; }
+}
+
+// ── Controls ───────────────────────────────────────────────────────────────
+
+document.getElementById('btnClear').addEventListener('click', () => {
+  files = [];
+  processedData = [];
+  renderFileList();
+  document.getElementById('btnProcess').disabled  = true;
+  document.getElementById('btnExport').disabled   = true;
+  document.getElementById('resultsCard').style.display = 'none';
+  logEl.style.display = 'none';
+  logEl.innerHTML = '';
+});
+
+document.getElementById('btnProcess').addEventListener('click', async () => {
+  processedData = [];
+  logEl.style.display = 'none';
+  logEl.innerHTML = '';
+  const btn = document.getElementById('btnProcess');
+  btn.disabled = true;
+  btn.textContent = '⏳ Procesando...';
+
+  for (let i = 0; i < files.length; i++) {
+    setBadge(i, 'processing', '⏳ Procesando…');
+    try {
+      const rows = await parsePDF(files[i]);
+      processedData.push(...rows);
+      setBadge(i, 'ok', `✓ ${rows.length} fila${rows.length !== 1 ? 's' : ''}`);
+      addLog(`[${files[i].name}] → ${rows.length} filas`);
+    } catch (err) {
+      setBadge(i, 'error', '✗ Error');
+      addLog(`[${files[i].name}] ERROR: ${err.message}`, true);
+    }
+  }
+
+  renderResults();
+  btn.disabled    = false;
+  btn.textContent = '⚙️ Procesar PDFs';
+  document.getElementById('btnExport').disabled = processedData.length === 0;
+});
+
+document.getElementById('btnExport').addEventListener('click', exportExcel);
+
+// ── PDF parsing ────────────────────────────────────────────────────────────
+
+const MONTHS_ES = {
+  enero:'01', febrero:'02', marzo:'03', abril:'04', mayo:'05', junio:'06',
+  julio:'07', agosto:'08', septiembre:'09', octubre:'10', noviembre:'11', diciembre:'12'
+};
+
+function parseFilename(name) {
+  const base = name.replace(/\.pdf$/i, '').trim();
+  const turnoM = base.match(/\s+([NnMmTt])\s*$/);
+  const turno  = turnoM ? turnoM[1].toUpperCase() : null;
+  const dateM  = base.match(/^(\d{2})[-\/](\d{2})/);
+  const fecha  = dateM ? `${dateM[1]}/${dateM[2]}` : null;
+  return { fecha, turno };
+}
+
+function extractMetaFromText(items) {
+  const allText = items.map(it => it.str || '').join(' ');
+
+  // Date: "01 de junio"
+  let fecha = null;
+  const dm = allText.match(/(\d{1,2})\s+de\s+([a-záéíóú]+)/i);
+  if (dm) {
+    const day = dm[1].padStart(2, '0');
+    const mon = MONTHS_ES[(dm[2] || '').toLowerCase()];
+    if (mon) fecha = `${day}/${mon}`;
+  }
+
+  // Turno: look for "Noche", "Mañana", "Tarde"
+  let turno = null;
+  if (/\bNoche\b/i.test(allText))    turno = 'N';
+  else if (/\bMa[ñn]ana\b/i.test(allText)) turno = 'M';
+  else if (/\bTarde\b/i.test(allText)) turno = 'T';
+
+  return { fecha, turno };
+}
+
+function groupByY(items, tol = 3) {
+  const groups = [];
+  for (const item of items) {
+    if (!item.str || !item.str.trim()) continue;
+    const y = item.transform[5];
+    const g = groups.find(g => Math.abs(g.y - y) <= tol);
+    if (g) g.items.push(item);
+    else groups.push({ y, items: [item] });
+  }
+  groups.sort((a, b) => b.y - a.y); // top → bottom (PDF Y grows upward)
+  for (const g of groups) g.items.sort((a, b) => a.transform[4] - b.transform[4]);
+  return groups;
+}
+
+async function parsePDF(file) {
+  const buf  = await file.arrayBuffer();
+  const pdf  = await pdfjsLib.getDocument({ data: buf }).promise;
+  const fn   = parseFilename(file.name);
+  const rows = [];
+
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const tc   = await page.getTextContent();
+    const items = tc.items;
+
+    // Resolve fecha / turno: PDF text first, filename fallback
+    const meta = extractMetaFromText(items);
+    const fecha = meta.fecha || fn.fecha || '?';
+    const turno = meta.turno || fn.turno || '?';
+
+    // Anchor on "ARTICULO" header to get column X
+    const artHeader = items.find(it => it.str && it.str.trim() === 'ARTICULO');
+    if (!artHeader) continue;
+
+    const artX    = artHeader.transform[4];
+    const artW    = artHeader.width  || 70;
+    const headerY = artHeader.transform[5];
+
+    // Right boundary of ARTICULO column = start of next header column
+    const rightCandidates = items
+      .filter(it => {
+        const x = it.transform[4];
+        const y = it.transform[5];
+        const t = (it.str || '').trim();
+        return Math.abs(y - headerY) < 5 && x > artX + 10 &&
+               (t.startsWith('DESCRI') || t.startsWith('TALLE') || t.startsWith('COLOR'));
+      })
+      .map(it => it.transform[4]);
+    const artEndX = rightCandidates.length ? Math.min(...rightCandidates) : artX + artW + 50;
+
+    // MAQ. header X
+    const maqHeader = items.find(it => it.str && it.str.trim() === 'MAQ.');
+    const maqX      = maqHeader ? maqHeader.transform[4] : artX - 60;
+
+    // Build row groups from items below the header
+    const dataItems  = items.filter(it => it.transform[5] < headerY - 2);
+    const lineGroups = groupByY(dataItems);
+
+    let currentMaq = null;
+
+    for (const grp of lineGroups) {
+      // ── Detect machine number (integer 1-99 in MAQ column)
+      const maqItem = grp.items.find(it => {
+        const x   = it.transform[4];
+        const val = it.str.trim();
+        return /^\d+$/.test(val) &&
+               parseInt(val) >= 1 && parseInt(val) <= 99 &&
+               x >= maqX - 25 && x < artX - 3;
+      });
+      if (maqItem) currentMaq = parseInt(maqItem.str.trim());
+
+      // ── Collect article text (all items in ARTICULO column range)
+      const artItems = grp.items.filter(it => {
+        const x = it.transform[4];
+        return x >= artX - 8 && x < artEndX;
+      });
+      if (!artItems.length || currentMaq === null) continue;
+
+      const articulo = artItems.map(it => it.str.trim()).filter(Boolean).join(' ').trim();
+      if (!articulo || articulo === '0') continue;
+
+      rows.push({ fecha, turno, maquina: currentMaq, articulo });
+    }
+  }
+
+  return rows;
+}
+
+// ── Results & Export ───────────────────────────────────────────────────────
+
+function renderResults() {
+  const card   = document.getElementById('resultsCard');
+  const wrap   = document.getElementById('tableWrap');
+  const sumEl  = document.getElementById('summary');
+  card.style.display = 'block';
+
+  if (!processedData.length) {
+    sumEl.textContent = '';
+    wrap.innerHTML = `<p class="empty-msg">⚠️ No se encontraron datos.<br>Verificá que los PDFs sean planillas de producción del formato estándar.</p>`;
+    return;
+  }
+
+  const total = processedData.length;
+  sumEl.textContent = `${total} fila${total !== 1 ? 's' : ''} encontrada${total !== 1 ? 's' : ''} en ${files.length} archivo${files.length !== 1 ? 's' : ''}.`;
+
+  const LIMIT   = 300;
+  const preview = processedData.slice(0, LIMIT);
+
+  wrap.innerHTML = `
+    <table>
+      <thead>
+        <tr><th>Fecha</th><th>Turno</th><th>Máquina</th><th>Artículo</th></tr>
+      </thead>
+      <tbody>
+        ${preview.map(r => `
+          <tr>
+            <td>${esc(r.fecha)}</td>
+            <td>${esc(r.turno)}</td>
+            <td>${r.maquina}</td>
+            <td>${esc(r.articulo)}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+    ${total > LIMIT
+      ? `<p class="more-rows">… y ${total - LIMIT} filas más (todas se incluyen al exportar)</p>`
+      : ''}
+  `;
+
+  card.scrollIntoView({ behavior: 'smooth' });
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function exportExcel() {
+  const wsData = processedData.map(r => ({
+    Fecha:    r.fecha,
+    Turno:    r.turno,
+    Maquina:  r.maquina,
+    Articulo: r.articulo
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(wsData);
+  ws['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 32 }];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Produccion');
+
+  const d     = new Date();
+  const stamp = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
+  XLSX.writeFile(wb, `produccion_${stamp}.xlsx`);
+}
+</script>
+</body>
+</html>
