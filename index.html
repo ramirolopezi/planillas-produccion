@@ -135,9 +135,21 @@ dropZone.addEventListener('drop', e => {
 });
 fileInput.addEventListener('change', e => { addFiles([...e.target.files]); fileInput.value = ''; });
 
-function addFiles(newFiles) {
+async function addFiles(newFiles) {
   const existing = new Set(files.map(f => f.name));
-  files = [...files, ...newFiles.filter(f => !existing.has(f.name))];
+  const toAdd = newFiles.filter(f => !existing.has(f.name));
+
+  // Leer el contenido de cada archivo inmediatamente para evitar
+  // problemas de permisos/acceso al procesarlos después
+  for (const f of toAdd) {
+    try {
+      const buffer = await f.arrayBuffer();
+      files.push({ name: f.name, buffer });
+    } catch (e) {
+      console.error(`No se pudo leer ${f.name}:`, e);
+    }
+  }
+
   renderFileList();
   document.getElementById('btnProcess').disabled = files.length === 0;
 }
@@ -194,12 +206,39 @@ document.getElementById('btnProcess').addEventListener('click', async () => {
     }
   }
 
-  // Ordenar por Turno y luego por número de máquina
-  processedData.sort((a, b) => {
+  // ── Completar máquinas faltantes con "-" ──────────────────────────────────
+  const MAX_MAQ = 190;
+
+  // Agrupar por (fecha, turno)
+  const grupos = new Map();
+  for (const r of processedData) {
+    const key = `${r.fecha}||${r.turno}`;
+    if (!grupos.has(key)) grupos.set(key, { fecha: r.fecha, turno: r.turno, maquinas: new Map() });
+    const mmap = grupos.get(key).maquinas;
+    if (!mmap.has(r.maquina)) mmap.set(r.maquina, []);
+    mmap.get(r.maquina).push(r.articulo);
+  }
+
+  // Reconstruir con todas las máquinas 1-190, "-" si no hay artículo
+  const completo = [];
+  for (const { fecha, turno, maquinas } of grupos.values()) {
+    for (let m = 1; m <= MAX_MAQ; m++) {
+      const arts = maquinas.get(m);
+      if (arts && arts.length > 0) {
+        for (const a of arts) completo.push({ fecha, turno, maquina: m, articulo: a });
+      } else {
+        completo.push({ fecha, turno, maquina: m, articulo: '-' });
+      }
+    }
+  }
+
+  // Ordenar por Turno → Máquina
+  completo.sort((a, b) => {
     if (a.turno < b.turno) return -1;
     if (a.turno > b.turno) return  1;
     return a.maquina - b.maquina;
   });
+  processedData = completo;
 
   renderResults();
   btn.disabled    = false;
@@ -267,7 +306,8 @@ const INVALIDOS = ['FIRMA', 'RESPONSABLE', 'TOTALES', 'SELECCIONAR',
                    'PLANILLA', 'PRODUCCI'];
 
 async function parsePDF(file) {
-  const buf = await file.arrayBuffer();
+  // Usar buffer pre-leído o leer en el momento como fallback
+  const buf = file.buffer ? file.buffer.slice(0) : await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
   const fn  = parseFilename(file.name);
   const rows = [];
@@ -303,8 +343,8 @@ async function parsePDF(file) {
     const maqHeader = items.find(it => (it.str || '').trim() === 'MAQ.');
     const maqX = maqHeader ? maqHeader.transform[4] : artX - 60;
 
-    // ── PASADA 1: números de MAQ reales, ordenados de arriba a abajo ──
-    const sortedMaqs = items
+    // ── PASADA 1: números de MAQ con su Y, ordenados arriba → abajo ──
+    const maqList = items
       .filter(it => {
         const x = it.transform[4];
         const y = it.transform[5];
@@ -314,34 +354,42 @@ async function parsePDF(file) {
                x >= maqX - 30 && x < artX - 3 &&
                y < headerY - 2 && y > bottomY;
       })
-      .sort((a, b) => b.transform[5] - a.transform[5]) // arriba → abajo
-      .map(it => parseInt(it.str.trim()));
+      .sort((a, b) => b.transform[5] - a.transform[5])
+      .map(it => ({ maq: parseInt(it.str.trim()), y: it.transform[5] }));
 
-    // ── PASADA 2: artículos en la columna ARTICULO, ordenados de arriba a abajo ──
-    const sortedArts = items
-      .filter(it => {
-        const x = it.transform[4];
-        const y = it.transform[5];
-        return x >= artX - 12 && x <= artX + 28 &&
-               y < headerY - 2 && y > bottomY &&
-               (it.str || '').trim() !== '';
-      })
-      .sort((a, b) => b.transform[5] - a.transform[5]); // arriba → abajo
+    addLog(`  Pág ${p} [${file.name}]: ${maqList.length} MAQs artX=${Math.round(artX)} turno=${turno}`);
 
-    addLog(`  Pág ${p} [${file.name}]: artX=${Math.round(artX)} maqs=${sortedMaqs.length} arts=${sortedArts.length} turno=${turno}`);
+    // ── PASADA 2: para cada máquina, extraer artículos dentro de su rango Y ──
+    // El rango Y de cada máquina va desde el punto medio con la anterior
+    // hasta el punto medio con la siguiente
+    for (let i = 0; i < maqList.length; i++) {
+      const { maq, y: maqY } = maqList[i];
 
-    // ── Asignación: máquina[i] → slots 2i y 2i+1 ──
-    for (let i = 0; i < sortedMaqs.length; i++) {
-      const maquina = sortedMaqs[i];
-      const slot1 = sortedArts[2 * i];
-      const slot2 = sortedArts[2 * i + 1];
+      // Límites: punto medio entre MAQs consecutivos
+      const topY = i === 0
+        ? headerY - 2
+        : (maqList[i - 1].y + maqY) / 2;
+      const botY = i === maqList.length - 1
+        ? bottomY
+        : (maqY + maqList[i + 1].y) / 2;
 
-      for (const slot of [slot1, slot2]) {
-        if (!slot) continue;
-        const articulo = slot.str.trim();
+      // Artículos dentro de este rango Y y en la columna ARTICULO
+      const machineArts = items
+        .filter(it => {
+          const x = it.transform[4];
+          const y = it.transform[5];
+          const s = (it.str || '').trim();
+          return s !== '' &&
+                 x >= artX - 12 && x <= artX + 50 &&
+                 y <= topY && y > botY;
+        })
+        .sort((a, b) => b.transform[5] - a.transform[5]);
+
+      for (const it of machineArts) {
+        const articulo = it.str.trim();
         if (!articulo || articulo === '0') continue;
         if (INVALIDOS.some(inv => articulo.toUpperCase().includes(inv.toUpperCase()))) continue;
-        rows.push({ fecha, turno, maquina, articulo });
+        rows.push({ fecha, turno, maquina: maq, articulo });
       }
     }
   }
