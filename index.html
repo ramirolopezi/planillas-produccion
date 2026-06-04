@@ -59,6 +59,21 @@
     .log { background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; margin-top: 16px; font-size: 0.8rem; font-family: monospace; max-height: 160px; overflow-y: auto; display: none; }
     .log-line { padding: 1px 0; color: #4a5568; }
     .log-line.warn { color: #c05621; }
+
+    /* Artículo desconocido */
+    .art-unknown { color: #c05621; font-weight: 600; }
+
+    /* DB card */
+    .db-input-row { display: flex; gap: 8px; margin: 12px 0; }
+    .db-input-row input { flex: 1; padding: 8px 12px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 0.9rem; }
+    .db-count { font-size: 0.9rem; color: #4a5568; margin-bottom: 8px; }
+    .db-list { max-height: 180px; overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px; margin-top: 10px; display: none; }
+    .db-tag { display: inline-flex; align-items: center; gap: 4px; background: #ebf4ff; color: #1a56db; border-radius: 12px; padding: 2px 10px; font-size: 0.8rem; margin: 2px; }
+    .db-tag button { background: none; border: none; cursor: pointer; color: #c53030; font-size: 0.85rem; padding: 0 2px; }
+    .unknown-box { background: #fffbeb; border: 1px solid #f6ad55; border-radius: 6px; padding: 12px; margin-top: 12px; display: none; }
+    .unknown-box h4 { font-size: 0.85rem; color: #c05621; margin-bottom: 8px; }
+    .unknown-item { display: inline-flex; align-items: center; gap: 6px; background: white; border: 1px solid #f6ad55; border-radius: 6px; padding: 4px 10px; font-size: 0.82rem; margin: 3px; }
+    .unknown-item button { background: #276749; color: white; border: none; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 0.75rem; }
   </style>
 </head>
 <body>
@@ -85,8 +100,27 @@
     </div>
   </div>
 
+  <!-- ── Base de Artículos ── -->
   <div class="card">
-    <div class="card-title">2 · Procesar y exportar</div>
+    <div class="card-title">2 · Base de Artículos</div>
+    <p class="db-count">Artículos registrados: <strong id="dbCount">0</strong>
+      &nbsp;<button class="btn btn-ghost" style="padding:4px 12px;font-size:0.8rem" onclick="toggleDbList()">Ver lista</button>
+      &nbsp;<button class="btn btn-ghost" style="padding:4px 12px;font-size:0.8rem" onclick="exportarDB()">⬇️ Exportar</button>
+      &nbsp;<button class="btn btn-ghost" style="padding:4px 12px;font-size:0.8rem;color:#c53030" onclick="limpiarDB()">🗑️ Limpiar</button>
+    </p>
+    <div class="db-input-row">
+      <input type="text" id="dbInput" placeholder="Código de artículo, ej: KC9629 M B" onkeydown="if(event.key==='Enter') agregarArticulo()">
+      <button class="btn btn-primary" onclick="agregarArticulo()">+ Agregar</button>
+      <label class="btn btn-ghost" style="cursor:pointer">
+        📤 Importar .txt
+        <input type="file" accept=".txt,.csv" style="display:none" onchange="importarDB(event)">
+      </label>
+    </div>
+    <div class="db-list" id="dbList"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">3 · Procesar y exportar</div>
     <div class="btn-row">
       <button class="btn btn-primary" id="btnProcess" disabled>⚙️ Procesar PDFs</button>
       <button class="btn btn-success" id="btnExport" disabled>⬇️ Exportar a Excel</button>
@@ -96,8 +130,12 @@
   </div>
 
   <div class="card" id="resultsCard" style="display:none">
-    <div class="card-title">3 · Resultados</div>
+    <div class="card-title">4 · Resultados</div>
     <p class="summary" id="summary"></p>
+    <div class="unknown-box" id="unknownBox">
+      <h4>⚠️ Artículos no registrados — agregá los correctos a la base:</h4>
+      <div id="unknownList"></div>
+    </div>
     <div class="table-wrap" id="tableWrap"></div>
   </div>
 
@@ -109,7 +147,82 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 
 let files = [];
 let processedData = [];
+let articulosDesconocidos = new Set(); // códigos encontrados pero no registrados
 const logEl = document.getElementById('log');
+
+// ── Base de Artículos (localStorage) ──────────────────────────────────────
+
+function getDB() {
+  try { return new Set(JSON.parse(localStorage.getItem('articuloDB') || '[]')); }
+  catch { return new Set(); }
+}
+function saveDB(db) {
+  localStorage.setItem('articuloDB', JSON.stringify([...db]));
+}
+
+function agregarArticulo(codigo) {
+  const input = document.getElementById('dbInput');
+  const code = (codigo || input.value).trim().toUpperCase();
+  if (!code) return;
+  const db = getDB();
+  if (!db.has(code)) { db.add(code); saveDB(db); }
+  input.value = '';
+  renderDB();
+}
+
+function eliminarArticulo(code) {
+  const db = getDB();
+  db.delete(code);
+  saveDB(db);
+  renderDB();
+}
+
+function limpiarDB() {
+  if (!confirm('¿Limpiar toda la base de artículos?')) return;
+  localStorage.removeItem('articuloDB');
+  renderDB();
+}
+
+function exportarDB() {
+  const db = getDB();
+  const blob = new Blob([[...db].join('\n'), { type: 'text/plain' }]);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'articulos.txt';
+  a.click();
+}
+
+function importarDB(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const db = getDB();
+    ev.target.result.split(/[\r\n,;]+/).map(s => s.trim().toUpperCase()).filter(Boolean).forEach(c => db.add(c));
+    saveDB(db);
+    renderDB();
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+}
+
+function toggleDbList() {
+  const el = document.getElementById('dbList');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function renderDB() {
+  const db = getDB();
+  document.getElementById('dbCount').textContent = db.size;
+  const list = document.getElementById('dbList');
+  list.innerHTML = [...db].sort().map(c => `
+    <span class="db-tag">${esc(c)}
+      <button onclick="eliminarArticulo('${esc(c)}')" title="Eliminar">×</button>
+    </span>`).join('');
+}
+
+// Inicializar DB al cargar
+renderDB();
 
 function addLog(msg, warn = false) {
   logEl.style.display = 'block';
@@ -206,8 +319,10 @@ document.getElementById('btnProcess').addEventListener('click', async () => {
     }
   }
 
-  // ── Completar máquinas faltantes con "-" ──────────────────────────────────
+  // ── Completar máquinas faltantes con "-" y validar contra la base ─────────
   const MAX_MAQ = 190;
+  const db = getDB();
+  articulosDesconocidos = new Set();
 
   // Agrupar por (fecha, turno)
   const grupos = new Map();
@@ -219,15 +334,23 @@ document.getElementById('btnProcess').addEventListener('click', async () => {
     mmap.get(r.maquina).push(r.articulo);
   }
 
-  // Reconstruir con todas las máquinas 1-190, "-" si no hay artículo
+  // Reconstruir con todas las máquinas 1-190
   const completo = [];
   for (const { fecha, turno, maquinas } of grupos.values()) {
     for (let m = 1; m <= MAX_MAQ; m++) {
       const arts = maquinas.get(m);
       if (arts && arts.length > 0) {
-        for (const a of arts) completo.push({ fecha, turno, maquina: m, articulo: a });
+        for (const rawCode of arts) {
+          const inDB = db.size === 0 || db.has(rawCode.toUpperCase());
+          if (!inDB) articulosDesconocidos.add(rawCode.toUpperCase());
+          completo.push({
+            fecha, turno, maquina: m,
+            articulo: inDB ? rawCode : 'validar articulo',
+            rawCode  // guardamos el original para poder agregarlo a la base
+          });
+        }
       } else {
-        completo.push({ fecha, turno, maquina: m, articulo: '-' });
+        completo.push({ fecha, turno, maquina: m, articulo: '-', rawCode: '' });
       }
     }
   }
@@ -437,7 +560,25 @@ function renderResults() {
   }
 
   const total = processedData.length;
-  sumEl.textContent = `${total} fila${total !== 1 ? 's' : ''} encontrada${total !== 1 ? 's' : ''} en ${files.length} archivo${files.length !== 1 ? 's' : ''}.`;
+  const unknownCount = articulosDesconocidos.size;
+  sumEl.textContent = `${total} fila${total !== 1 ? 's' : ''} en ${files.length} archivo${files.length !== 1 ? 's' : ''}.` +
+    (unknownCount ? ` ⚠️ ${unknownCount} artículo${unknownCount > 1 ? 's' : ''} sin registrar.` : '');
+
+  // Caja de artículos desconocidos
+  const unknownBox  = document.getElementById('unknownBox');
+  const unknownList = document.getElementById('unknownList');
+  if (unknownCount > 0) {
+    unknownBox.style.display = 'block';
+    unknownList.innerHTML = [...articulosDesconocidos].sort().map(code => `
+      <span class="unknown-item">
+        ${esc(code)}
+        <button onclick="agregarArticulo('${esc(code)}');this.closest('.unknown-item').style.opacity='0.4';this.textContent='✓'">
+          + Agregar
+        </button>
+      </span>`).join('');
+  } else {
+    unknownBox.style.display = 'none';
+  }
 
   const LIMIT   = 300;
   const preview = processedData.slice(0, LIMIT);
@@ -453,7 +594,7 @@ function renderResults() {
             <td>${esc(r.fecha)}</td>
             <td>${esc(r.turno)}</td>
             <td>${r.maquina}</td>
-            <td>${esc(r.articulo)}</td>
+            <td class="${r.articulo === 'validar articulo' ? 'art-unknown' : ''}">${esc(r.articulo)}</td>
           </tr>`).join('')}
       </tbody>
     </table>
@@ -474,7 +615,7 @@ function exportExcel() {
     Fecha:    r.fecha,
     Turno:    r.turno,
     Maquina:  r.maquina,
-    Articulo: r.articulo
+    Articulo: r.articulo  // ya contiene "validar articulo" o el código o "-"
   }));
 
   const ws = XLSX.utils.json_to_sheet(wsData);
