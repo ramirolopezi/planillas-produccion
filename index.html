@@ -373,20 +373,23 @@ async function parsePDF(file) {
         ? bottomY
         : (maqY + maqList[i + 1].y) / 2;
 
-      // Artículos dentro de este rango Y y en la columna ARTICULO
-      const machineArts = items
-        .filter(it => {
-          const x = it.transform[4];
-          const y = it.transform[5];
-          const s = (it.str || '').trim();
-          return s !== '' &&
-                 x >= artX - 12 && x <= artX + 100 &&
-                 y <= topY && y > botY;
-        })
-        .sort((a, b) => b.transform[5] - a.transform[5]);
+      // Ítems dentro del rango Y de esta máquina, a la derecha de artX
+      const rangeItems = items.filter(it => {
+        const x = it.transform[4];
+        const y = it.transform[5];
+        return (it.str || '').trim() !== '' &&
+               x >= artX - 12 &&       // desde la columna ARTICULO hacia la derecha
+               y <= topY && y > botY;  // dentro del rango vertical de esta máquina
+      });
 
-      for (const it of machineArts) {
-        const articulo = it.str.trim();
+      // Agrupar por sub-fila (Y), y de cada sub-fila tomar SOLO el ítem más a la izquierda
+      // El más a la izquierda siempre es el artículo (la descripción queda más a la derecha)
+      const subRows = groupByY(rangeItems, 4);
+      for (const sr of subRows) {
+        // sr.items ya está ordenado de izquierda a derecha por groupByY
+        const artItem = sr.items[0];
+        if (!artItem) continue;
+        const articulo = artItem.str.trim();
         if (!articulo || articulo === '0') continue;
         if (INVALIDOS.some(inv => articulo.toUpperCase().includes(inv.toUpperCase()))) continue;
         rows.push({ fecha, turno, maquina: maq, articulo });
