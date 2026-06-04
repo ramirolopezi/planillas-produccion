@@ -343,6 +343,16 @@ async function parsePDF(file) {
     const maqHeader = items.find(it => (it.str || '').trim() === 'MAQ.');
     const maqX = maqHeader ? maqHeader.transform[4] : artX - 60;
 
+    // Buscar X de la columna DESCRIPCIÓN en cualquier parte de la página
+    // para usarla como límite derecho del artículo
+    const descItem = items.find(it => {
+      const s = (it.str || '').trim().toUpperCase();
+      const x = it.transform[4];
+      return s.includes('DESCRI') && x > artX + 5;
+    });
+    const descX = descItem ? descItem.transform[4] : null;
+    addLog(`  Pág ${p} [${file.name}]: artX=${Math.round(artX)} descX=${descX ? Math.round(descX) : 'no encontrado'} turno=${turno}`);
+
     // ── PASADA 1: números de MAQ con su Y, ordenados arriba → abajo ──
     const maqList = items
       .filter(it => {
@@ -373,20 +383,21 @@ async function parsePDF(file) {
         ? bottomY
         : (maqY + maqList[i + 1].y) / 2;
 
-      // Ítems dentro del rango Y de esta máquina, a la derecha de artX
+      // Ítems dentro del rango Y de esta máquina, SOLO en la columna ARTICULO
+      // Límite derecho: X de DESCRIPCIÓN si se encontró, sino artX + 55
+      const artMaxX = descX ? descX - 2 : artX + 55;
+
       const rangeItems = items.filter(it => {
         const x = it.transform[4];
         const y = it.transform[5];
         return (it.str || '').trim() !== '' &&
-               x >= artX - 12 &&       // desde la columna ARTICULO hacia la derecha
-               y <= topY && y > botY;  // dentro del rango vertical de esta máquina
+               x >= artX - 12 && x < artMaxX &&
+               y <= topY && y > botY;
       });
 
-      // Agrupar por sub-fila (Y), y de cada sub-fila tomar SOLO el ítem más a la izquierda
-      // El más a la izquierda siempre es el artículo (la descripción queda más a la derecha)
+      // Agrupar por sub-fila y tomar el ítem más a la izquierda de cada una
       const subRows = groupByY(rangeItems, 4);
       for (const sr of subRows) {
-        // sr.items ya está ordenado de izquierda a derecha por groupByY
         const artItem = sr.items[0];
         if (!artItem) continue;
         const articulo = artItem.str.trim();
