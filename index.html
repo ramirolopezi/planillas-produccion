@@ -380,7 +380,7 @@ async function parsePDF(file) {
           const y = it.transform[5];
           const s = (it.str || '').trim();
           return s !== '' &&
-                 x >= artX - 12 && x <= artX + 50 &&
+                 x >= artX - 12 && x <= artX + 100 &&
                  y <= topY && y > botY;
         })
         .sort((a, b) => b.transform[5] - a.transform[5]);
