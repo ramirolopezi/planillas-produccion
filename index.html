@@ -116,6 +116,25 @@
         <input type="file" accept=".txt,.csv" style="display:none" onchange="importarDB(event)">
       </label>
     </div>
+
+    <!-- Carga masiva por pegado -->
+    <details style="margin-top:10px">
+      <summary style="cursor:pointer;font-size:0.88rem;color:#1a56db;font-weight:600">
+        📋 Carga masiva (pegado desde Excel o lista)
+      </summary>
+      <div style="margin-top:10px">
+        <p style="font-size:0.82rem;color:#718096;margin-bottom:6px">
+          Pegá la lista de artículos (una por línea, el encabezado "ART" se ignora automáticamente):
+        </p>
+        <textarea id="bulkInput" rows="8" style="width:100%;padding:8px;border:1px solid #cbd5e0;border-radius:6px;font-size:0.82rem;font-family:monospace;resize:vertical"
+          placeholder="ART&#10;SX4120-010-XS&#10;SX4120-010-S&#10;KC9629 M B&#10;..."></textarea>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+          <button class="btn btn-primary" onclick="importarMasivo()">⬆️ Importar lista</button>
+          <span id="bulkMsg" style="font-size:0.85rem;color:#276749;display:none"></span>
+        </div>
+      </div>
+    </details>
+
     <div class="db-list" id="dbList"></div>
   </div>
 
@@ -190,6 +209,25 @@ function exportarDB() {
   a.href = URL.createObjectURL(blob);
   a.download = 'articulos.txt';
   a.click();
+}
+
+function importarMasivo() {
+  const raw = document.getElementById('bulkInput').value;
+  const db = getDB();
+  let added = 0;
+  raw.split(/[\r\n]+/).forEach(line => {
+    const code = line.trim().toUpperCase();
+    // Ignorar encabezados y líneas vacías
+    if (!code || code === 'ART' || code === 'ARTICULO' || code === 'CÓDIGO') return;
+    if (!db.has(code)) { db.add(code); added++; }
+  });
+  saveDB(db);
+  renderDB();
+  document.getElementById('bulkInput').value = '';
+  const msg = document.getElementById('bulkMsg');
+  msg.style.display = 'inline';
+  msg.textContent = `✓ ${added} artículo${added !== 1 ? 's' : ''} agregado${added !== 1 ? 's' : ''} (total: ${db.size})`;
+  setTimeout(() => msg.style.display = 'none', 4000);
 }
 
 function importarDB(e) {
