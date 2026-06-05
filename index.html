@@ -566,6 +566,17 @@ async function parsePDF(file) {
                y <= topY && y > botY;
       });
 
+      // DEBUG: loguear los primeros 4 ítems de cada máquina en pág 2 de "01-06 1 N"
+      if (file.name.includes('1 N') && p === 2) {
+        const dbgAll = items
+          .filter(it => { const y=it.transform[5]; return (it.str||'').trim() && y<=topY && y>botY; })
+          .sort((a,b) => a.transform[4]-b.transform[4])
+          .slice(0, 5)
+          .map(it => `x${Math.round(it.transform[4])}="${it.str.trim().substring(0,18)}"`)
+          .join(' | ');
+        addLog(`  DBG MAQ${maq}: ${dbgAll}`);
+      }
+
       // Agrupar por sub-fila y tomar el ítem más a la izquierda de cada una
       const subRows = groupByY(rangeItems, 4);
       for (const sr of subRows) {
