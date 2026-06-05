@@ -572,9 +572,7 @@ async function parsePDF(file) {
         const artItem = sr.items[0];
         if (!artItem) continue;
         const articulo = artItem.str.trim().substring(0, 50); // máx 50 caracteres
-        if (!articulo || articulo === '0') continue;
-        if (INVALIDOS.some(inv => articulo.toUpperCase().includes(inv.toUpperCase()))) continue;
-        if (!esArticuloValido(articulo)) continue; // filtrar descripciones por patrón
+        if (!articulo || articulo === '0') continue; // solo filtrar celdas vacías
         rows.push({ fecha, turno, maquina: maq, articulo });
       }
     }
