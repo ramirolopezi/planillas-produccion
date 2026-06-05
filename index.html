@@ -562,7 +562,7 @@ async function parsePDF(file) {
         const x = it.transform[4];
         const y = it.transform[5];
         return (it.str || '').trim() !== '' &&
-               x >= artX - 12 && x < artMaxX &&
+               x >= artX - 25 && x < artMaxX &&  // -25 para capturar VN codes en x≈49
                y <= topY && y > botY;
       });
 
@@ -583,7 +583,8 @@ async function parsePDF(file) {
         const artItem = sr.items[0];
         if (!artItem) continue;
         const articulo = artItem.str.trim().substring(0, 50); // máx 50 caracteres
-        if (!articulo || articulo === '0') continue; // solo filtrar celdas vacías
+        if (!articulo || articulo === '0') continue;
+        if (!esArticuloValido(articulo)) continue; // filtrar descripciones (x=121 nunca arranca con letras+dígito)
         rows.push({ fecha, turno, maquina: maq, articulo });
       }
     }
