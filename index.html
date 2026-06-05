@@ -584,7 +584,11 @@ async function parsePDF(file) {
         if (!artItem) continue;
         const articulo = artItem.str.trim().substring(0, 50); // máx 50 caracteres
         if (!articulo || articulo === '0') continue;
-        if (!esArticuloValido(articulo)) continue; // filtrar descripciones (x=121 nunca arranca con letras+dígito)
+        // Log específico para diagnóstico de VN codes
+        if (articulo.substring(0,2).toUpperCase() === 'VN') {
+          addLog(`  VN encontrado: maq=${maq} art="${articulo}" valido=${esArticuloValido(articulo)}`);
+        }
+        if (!esArticuloValido(articulo)) continue;
         rows.push({ fecha, turno, maquina: maq, articulo });
       }
     }
